@@ -1,6 +1,7 @@
 import numpy as np
 from threading import Lock
-import copy
+
+
 
 global goal_state
 goal_state = None
@@ -8,11 +9,10 @@ goal_state = None
 global update_global_goal_mutex
 update_global_goal_mutex = Lock()
 
-OCCUPIED = -2
-NO_REPRESENTATIVE = 1000
-FREE = -1
 ROW = 0
 COL = 1
+FREE = -1
+EMPTY = 0
 ##############################################################
 # ---------------------The State class----------------------
 ##############################################################
@@ -54,13 +54,13 @@ class State:
         # There is no agent that completed his flow yet.
         for player_num in range(len(self.players)):
             self.finished[player_num] = False
-        self.finished_agents = 0
+        self.num_of_finished_agents = 0
         # Will be initialized in set_head
         self.head = None
         self.player = (size * size) + 1
         # Are calculated according to a call for the Connected-component Labeling function.
         self.regions_map = None
-        self.dependencies = {}
+        self.curr_empty_tiles = 0
 
 
 
@@ -72,6 +72,10 @@ class State:
         """
         self.head = (row, col)
         self.player = self.board[row][col]
+        # self.curr_empty_tiles = self.how_many_empty_tiles()
+        # manhattan_dist = self.manhattan_distance_heur(row, col, self.targets[self.player][ROW],self.targets[self.player][COL])
+        # self.h_value = self.curr_empty_tiles + manhattan_dist - 1
+
 
     def convertToNpFormat (self, boardStringRepresentation):
         """
@@ -142,7 +146,7 @@ class State:
             # print ("illegal (row, col) for move")
             return False;
         # There is no neighbour of the current player
-        elif(self.check_for_player_neighbour(row, col) == False):
+        elif(self.check_for_player_flow_neighbour(row, col) == False):
             return False;
         # Case of an occupied cell
         elif (self.board[row][col] != -1 ):
@@ -152,7 +156,7 @@ class State:
         return True
 
 
-    def check_for_player_neighbour(self, row, col):
+    def check_for_player_flow_neighbour(self, row, col):
         """
         Checks whether the player's flow is located in an adjacent square to the square [row][col]
         :param row: The given row index.
@@ -185,6 +189,13 @@ class State:
         else:
             return True
 
+    def update_finished_agents(self):
+        """
+        Updates the counter of agents that already have completed their flow in the current State.
+        """
+        for agent in self.finished:
+            if (self.finished[agent] == True):
+                self.num_of_finished_agents += 1
 
     def is_agent_goal_state(self, agent_num):
         """
@@ -307,6 +318,9 @@ class State:
         only_one_free_neighbor = (self.num_of_free_neighbours(row,col) == 1)
 
         # updates the g and h values
+        # self.curr_empty_tiles -= 1
+        # manhattan_dist = self.manhattan_distance_heur(row, col, self.targets[agent.player_num][ROW], self.targets[agent.player_num][COL])
+        # self.h_value = self.curr_empty_tiles + manhattan_dist - 1
         self.h_value -= 1
         # checks for a goal state for this agent and updates the agent and this board accordingly
         if (agent.target[0] == row and agent.target[1] == col):
@@ -363,222 +377,7 @@ class State:
         return ((self.h_value + self.g_value) >= (other.h_value + other.g_value))
 
 
-    ######################################################################################
-    # ---------------------Connected-component Labeling Functions-------------------------
-    ######################################################################################
 
-    #************************************* Pass_1 Function and Support Methods*****************************************
-
-    def regions_map_init_and_first_row_calculation(self, regions_map, current_label, decrease_label):
-        """
-        Inits the cells of the regions map to the default value (OCCUPIED -2)and calculates the labels of the first row
-        (need to check only the left neighbour).
-        :param regions_map: The regions map to work on
-        :param current_label: The current free label
-        :param decrease_label: Boolean value, according to this flag we can deduce whether to decrease the current
-        labeling value.
-        :return: Updated values of the current label and decrease_label
-        """
-        # Init the regions map with the default value -2: represents an occupied cell.
-        for row in range(self.size):
-            for col in range(self.size):
-                self.regions_map[row][col] = OCCUPIED
-
-        # special case - top left corner
-        content = self.board[0][0]
-        if (content == FREE):  # or ((((0,0) in self.sources.values()) or ((0,0) in self.targets.values())) and (self.finished[content] == False))):
-            self.regions_map[0][0] = current_label
-        # Most top Row (not include the top left corner)
-        for row_index in range(1, self.size):
-            content = self.board[0][row_index]
-            if (content == FREE):  # or ((((0,row_index) in self.sources.values()) or ((0,row_index) in self.targets.values())) and (self.finished[content] == False))):
-                if (decrease_label == False):
-                    self.regions_map[0][row_index] = current_label
-                else:
-                    current_label -= 1
-                    self.regions_map[0][row_index] = current_label
-                    decrease_label = False
-            elif (decrease_label == False):
-                decrease_label = True
-
-        return decrease_label, current_label
-
-
-    # Major Function of this section - performs pass1 on the current game board
-    def produce_regions_map_pass1(self):
-        """
-        Performs the first pass of the Connected-component Labeling algorithm on the current board.
-        For further reading - http://aishack.in/tutorials/labelling-connected-components-example/
-        :return: The corresponded dependencies list
-        """
-        self.regions_map = copy.deepcopy(self.board)
-        current_label = -3
-        decrease_label = False
-        self.dependencies = {}
-
-        decrease_label, current_label = self.regions_map_init_and_first_row_calculation(self.regions_map, current_label, decrease_label)
-
-        # Main loop - Iterates all over the board (except the first row)
-        for row in range (1,self.size):
-            for col in range (self.size):
-                content = self.board [row][col]
-                if (content == FREE):
-                    # First cell in the row
-                    if (col - 1 < 0):
-                        # Look only up
-                        if (self.regions_map[row - 1][col] != OCCUPIED):
-                            self.regions_map[row][col] = self.regions_map[row - 1][col] # The up cell in the board is also empty -> we'll have the same label
-
-                        else: # The up cell is occupied in the board, will have to get new label
-                            current_label -= 1
-                            self.regions_map[row][col] = current_label
-
-                    # The general case: we look both at the up and at theleft neighbours in the regions_map
-                    else:
-                        # Both of the neighbours are occupied in the board, will have to get new label
-                        if (self.regions_map[row - 1][col] == OCCUPIED and self.regions_map[row][col - 1] == OCCUPIED):
-                            current_label -= 1
-                            self.regions_map[row][col] = current_label
-
-                        # Only the up neighbour is free in the board
-                        elif (self.regions_map[row - 1][col] != OCCUPIED and self.regions_map[row][col - 1] == OCCUPIED):
-                            self.regions_map[row][col] = self.regions_map[row - 1][col]
-                        # Only the left neighbour is free in the board
-                        elif (self.regions_map[row - 1][col] == OCCUPIED and self.regions_map[row][col - 1] != OCCUPIED):
-                            self.regions_map[row][col] = self.regions_map[row][col - 1]
-                        # Both the up and the left neighbours are free in the board, we'll take the minimum and ENTER A DEPENDENCY TO THE DICT.
-                        else:
-                            self.dependencies_updating(row, col)
-
-        return self.dependencies
-
-    def dependencies_updating (self, row, col):
-        """
-        Updates the dependencies list to the regions map.
-        :param row: The given row index.
-        :param col:  The given column index.
-        """
-        # Case that the up and left neighbours have the same regions_map value
-        if (self.regions_map[row - 1][col] == self.regions_map[row][col - 1]):
-            self.regions_map[row][col] = self.regions_map[row - 1][col]
-        # The up and left neighbours DON'T have the same regions_map value
-        else:
-            minimum = min(self.regions_map[row - 1][col], self.regions_map[row][col - 1])
-            maximum = max(self.regions_map[row - 1][col], self.regions_map[row][col - 1])
-            self.regions_map[row][col] = maximum
-
-            head_of_max = self.find_representative(self.dependencies, maximum)
-            # case that maximum is NOT in dependencies (neither as key nor as a set member) - we'll add it as a key
-            if (head_of_max == NO_REPRESENTATIVE):
-                self.dependencies[maximum] = set()
-                self.dependencies[maximum].add(maximum)
-                head_of_max = maximum
-
-            head_of_min = self.find_representative(self.dependencies, minimum)
-            # case that minimum is NOT in the dependencies -> we'll add it to the maximum's set
-            if (head_of_min == NO_REPRESENTATIVE):
-                self.dependencies[head_of_max].add(minimum)
-            # case that minimum is IN the dependencies(as a key or as a set member) with other head than head_of_max -> we'll unite these 2 sets
-            elif (head_of_min != head_of_max):
-                minimum_set = copy.deepcopy(self.dependencies[head_of_min])
-                del self.dependencies[head_of_min]
-                self.dependencies[head_of_max] = (self.dependencies[head_of_max] | minimum_set)
-
-
-    def find_representative(self, dict, item):
-        """
-        Finds the item's representative in the given dependencies list.
-        :param dict: A dependencies list
-        :param item: A given item.
-        :return: The representative of item in the dependencies list.
-        """
-        # case the item is the head of a set
-        if (item in dict.keys()):
-            return item
-
-        # case the item is a member in other list
-        for key_val in dict:
-            if (item in dict[key_val]):
-                return key_val
-
-        # case that item is NOT in dict
-        return NO_REPRESENTATIVE
-
-    def produce_regions_map_pass2(self,dependencies):
-        """
-        Perform pass 2 of the  Connected-component Labeling algorithm.
-        :param dependencies: The dependencies list calculated in pass 1 (a dictionary)
-        :return: The set of labels after regions union (according to the dependencies list).
-        """
-        labels_set = set()
-        # Main loop - Iterates all over the board and determines the regions
-        for row in range (self.size):
-            for col in range (self.size):
-                if (self.regions_map[row][col] == OCCUPIED): # An occupied cell - there is nothing to do
-                    pass
-                else:
-                    if (self.regions_map[row][col] in dependencies.keys()):
-                        pass # The region of (row, col) is a representative in the dependency list
-                    else: # The label in regions_map[row][col] has a dependency, lets find which
-                        for key_val in dependencies.keys():
-                            if (self.regions_map[row][col] in dependencies[key_val]):
-                                self.regions_map[row][col]= key_val
-                                break
-                    # if regions_map[row][col] has no dependency (neither as a key nor as a dependence)
-                    # we'll leave it with the label of itself
-
-                    labels_set.add(self.regions_map[row][col])
-
-        return labels_set
-
-    def update_finished_agents(self):
-        """
-        Updates the counter of agents that already have completed their flow in the current State.
-        """
-        for agent in self.finished:
-            if (self.finished[agent] == True):
-                self.finished_agents += 1
-
-    def find_regions(self, row, col):
-        """
-        Finds the regions which are adjacent to (row, col)
-        :param row: The given row index.
-        :param col:  The given column index.
-        :return: A set contains the adjacent regions to (row, col)
-        """
-        regions = set ()
-
-        if ((row + 1) < self.size):
-            if (self.regions_map[row +1][col] != OCCUPIED):
-                regions.add(self.regions_map[row +1][col])
-        if ((row - 1) >= 0 ):
-            if (self.regions_map[row - 1][col] != OCCUPIED):
-                regions.add(self.regions_map[row - 1][col])
-        if ((col + 1) < self.size):
-            if (self.regions_map[row][col + 1] != OCCUPIED):
-                regions.add(self.regions_map[row][col + 1])
-        if ((col - 1) >= 0 ):
-            if (self.regions_map[row][col - 1] != OCCUPIED):
-                regions.add(self.regions_map[row][col - 1])
-
-        return regions
-
-    def regions_lists_contains_mutual_area(self, region_list1, region_list2, agent_num):
-        """
-        Checks whether 2 given regions lists contain at least one mutual region.
-        :param region_list1: The first given regions list
-        :param region_list2: The second given regions list
-        :param agent_num: The number of agent to check whether he just completed his flow, in this case there is no
-        significance to the regions list.
-        :return: True IFF (there is at least one mutual region among the lists OR the given agent just completed his flow).
-        """
-        if (self.is_agent_goal_state(agent_num)):
-            return True
-        for item in region_list1:
-            if (item in region_list2):
-                return True
-
-        return False
 
     def is_head_a_neighbour(self, row, col):
         """
@@ -644,6 +443,18 @@ class State:
         if (position >= (self.size * self.size)):
             raise Exception("Illegal arguments for from_position_to_rowcol", "The given position is out of the board sizes!!!")
         return (position // self.size, position % self.size)
+
+
+    def manhattan_distance_heur(self, src_row, src_col, trg_row, trg_col):
+        return (abs(trg_row - src_row) + abs (trg_col - src_col))
+
+    def how_many_empty_tiles(self):
+        num_of_empty_tiles = EMPTY
+        for row in range(self.size):
+            for col in range(self.size):
+                num_of_empty_tiles += 1
+
+        return num_of_empty_tiles
 
 ##############################################################
 # ---------------------Testing Function----------------------

@@ -918,7 +918,7 @@ if __name__ == '__main__':
 
     # Creates a Priority-Queue for every agent in the Shared-Resource
     for agent_num in tested_state.sources:
-        Agent.local_finished_states[agent_num] = queue.PriorityQueue()
+        Agent.inter_agents_finished_states[agent_num] = queue.PriorityQueue()
 
 
 

@@ -105,7 +105,7 @@ class FlowFreeThread (threading.Thread):
        """
        self._stop_event.set()
 
-   def stopped(self):
+   def is_stopped(self):
        """
         Returns whether the current FreeFlowThread is stopped.
        """
